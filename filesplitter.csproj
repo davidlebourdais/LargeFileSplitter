@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>netcoreapp3.0;net451</TargetFrameworks>
+    <PackageId>LargeFileSplitter</PackageId>
+    <Title>Large File Splitter</Title>
+    <PackageDescription>Splits large files into smaller one</PackageDescription>
+    <PackageTags>Tools;File-texts;Splitter</PackageTags>
+    <Version>0.5.0</Version>
+    <Authors>David Le Bourdais</Authors>
+	<Copyright>Copyright © 2019-2020</Copyright>
+  </PropertyGroup>
+
+</Project>
