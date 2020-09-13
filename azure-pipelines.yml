@@ -1,0 +1,271 @@
+name: $(SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.r)
+
+pool:
+  vmImage: 'windows-latest'
+
+trigger:
+  tags:
+    include:
+    - v*
+  branches:
+    include:
+    - master
+
+pr:
+- master
+
+variables: 
+  projectName: 'LargeFileSplitter'
+  netframeworkVersion: 'net451'
+  netCoreAppVersion: 'netcoreapp3.0'
+  lastOrCurrentVersionTag: '' 
+  nightlyBuildVersion: 'unset'
+  readmeMessageNetFramework: 'You need to have a .NET Framework environment to run this binary on your machine.'
+  readmeMessagePrefix: 'You need to have a .NET Core environment to run this binary on your machine. You can also produce a standalone app with ''dotnet publish -r '
+  readmeMessageSuffix: ' -c Release -f netcoreapp3.0 /p:PublishSingleFile=true'' for binary redistribution.'
+  ${{ if startsWith(variables['Build.SourceBranch'], 'refs/tags/v') }}:
+    isReleaseTagBranch: true
+
+jobs:
+- job: Build
+  displayName: 'Build'
+
+  steps:
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore all'
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Build all'
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+        arguments: '--configuration Release --no-restore'
+
+- job: CreateRelease
+  displayName: 'Make Github release with binaries'
+  dependsOn: Build
+  condition: and(succeeded(), variables['isReleaseTagBranch'])
+
+  steps: 
+    - task: PowerShell@2
+      displayName: 'Get last tag version'
+      inputs:
+        targetType: 'inline'
+        script: |
+          Try {
+            $LastTag = git describe --tags
+          }
+          Catch { }
+          Finally {
+            if (!$LastTag) {
+              if ($env:isForRelease) {}
+              $LastTag = 'v0.0.0'
+            }
+            Write-Host "##vso[task.setvariable variable=lastOrCurrentVersionTag]$LastTag"
+            echo "Last branch tag is: $LastTag"
+          }
+        ignoreLASTEXITCODE: true
+
+    - task: PowerShell@2
+      displayName: 'Check tag version match'
+      env:
+        LastTag: $(lastOrCurrentVersionTag)
+      inputs:
+        targetType: 'inline'
+        errorActionPreference: 'silentlyContinue'
+        script: |
+          Try {
+            $ProjectTag = Get-ChildItem -Path . -Include *.csproj -Exclude *.*Tests*.csproj -Recurse |
+                          Select-Xml -XPath "/Project/PropertyGroup/Version" |
+                          Select-Object -Property @{Name="Version"; Expression={$_.Node.InnerXml}} |
+                          Select-Object -ExpandProperty Version |
+                          Select-Object -First 1
+            echo "Project file version definition is: $ProjectTag"
+          }
+          Catch {
+              Write-Host "##vso[task.LogIssue type=error;]No 'Version' defined in project's .csproj file"
+              Write-Host "##vso[task.complete result=Failed;]No project version"
+          }
+          $LastTag = $env:LastTag.TrimStart('v')
+          if ($ProjectTag -ne $LastTag) {
+            Write-Host "##vso[task.LogIssue type=error;]Project 'Version' property in .csproj does not match release tag version"
+            Write-Host "##vso[task.complete result=Failed;]Version does not match"
+          }
+        ignoreLASTEXITCODE: true
+     
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for win-x64 / .NET Framework'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/win-x64/$(netframeworkVersion) -r win-x64 -f $(netframeworkVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for win-x64 / .NET Framework'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/win-x64/$(netframeworkVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessageNetFramework)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for win-x64 / .NET Core'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/win-x64/$(netCoreAppVersion) -r win-x64 -f $(netCoreAppVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for win-x64 / .NET Core'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/win-x64/$(netCoreAppVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessagePrefix)win-x64$(readmeMessageSuffix)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive win-x64 binaries as .zip'
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish/win-x64'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/win-x64.zip'
+        replaceExistingArchive: true
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for win-x86 / .NET Framework'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/win-x86/$(netframeworkVersion) -r win-x86 -f $(netframeworkVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for win-x86 / .NET Framework'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/win-x86/$(netframeworkVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessageNetFramework)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for win-x86 / .NET Core'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/win-x86/$(netCoreAppVersion) -r win-x86 -f $(netCoreAppVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for win-x86 / .NET Core'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/win-x86/$(netCoreAppVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessagePrefix)win-x86$(readmeMessageSuffix)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive win-x86 binaries as .zip'
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish/win-x86'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/win-x86.zip'
+        replaceExistingArchive: true
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for linux-x64 / .NET Core'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/linux-x64/$(netCoreAppVersion) -r linux-x64 -f $(netCoreAppVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for linux-x64 / .NET Core'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/linux-x64/$(netCoreAppVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessagePrefix)linux-x64$(readmeMessageSuffix)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive linux-x64 binaries as .tar.gz'
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish/linux-x64'
+        includeRootFolder: true
+        archiveType: 'tar'
+        tarCompression: 'gz'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/linux-x64.tar.gz'
+        replaceExistingArchive: true
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish for osx-x64 / .NET Core'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        zipAfterPublish: false
+        modifyOutputPath: false
+        projects: '**/$(projectName).csproj'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/publish/osx-x64/$(netCoreAppVersion) -r osx-x64 -f $(netCoreAppVersion) -c Release --no-self-contained /p:DebugType=None'
+
+    - task: PowerShell@2
+      displayName: 'Publish README for osx-x64 / .NET Core'
+      env:
+        TargetPath: '$(Build.ArtifactStagingDirectory)/publish/osx-x64/$(netCoreAppVersion)/readme.txt'
+        ReadMeMessage: '$(readmeMessagePrefix)osx-x64$(readmeMessageSuffix)'
+      inputs:
+        targetType: 'inline'
+        script: | 
+          Out-File -FilePath $env:TargetPath -InputObject $env:ReadMeMessage -Encoding ASCII
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive osx-x64 binaries as .tar.gz'
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish/osx-x64'
+        includeRootFolder: true
+        archiveType: 'tar'
+        tarCompression: 'gz'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/osx-x64.tar.gz'
+        replaceExistingArchive: true
+
+    - task: PowerShell@2
+      displayName: 'Get and write release changelog diff'
+      inputs:
+        filePath: 'getchangelogdiff.ps1'
+        arguments: '-TagVersion $(lastOrCurrentVersionTag) -ChangeLogFilePath CHANGELOG.md -ChangeLogDiffWritePath $(Build.ArtifactStagingDirectory)\ChangeLogDiff.md'
+
+    - task: GitHubRelease@1
+      displayName: 'Create GitHub release'
+      inputs:
+        gitHubConnection: 'Connection to Github Account'
+        tagPattern: '^v\d+\.\d+\.\d+$'
+        releaseNotesFilePath: '$(Build.ArtifactStagingDirectory)\ChangeLogDiff.md'
+        assets: |
+          $(Build.ArtifactStagingDirectory)/**/*.zip
+          $(Build.ArtifactStagingDirectory)/**/*.tar.gz
