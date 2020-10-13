@@ -1,4 +1,5 @@
 # Large File Splitter
+[![Build Status](https://dev.azure.com/davidlebourdais/LargeFileSplitter/_apis/build/status/davidlebourdais.LargeFileSplitter?branchName=refs%2Ftags%2Fv0.5.0)](https://dev.azure.com/davidlebourdais/LargeFileSplitter/_build/latest?definitionId=9&branchName=refs%2Ftags%2Fv0.5.0)
 
 A simple program to break large text files into smaller pieces. 
 
